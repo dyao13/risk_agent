@@ -1,6 +1,5 @@
 import numpy as np
 import random
-import gym
 from collections import deque
 import tensorflow as tf
 from tensorflow.keras import layers, models, optimizers
@@ -41,8 +40,8 @@ class RiskLearn:
         self.epsilon_decay = epsilon_decay
         self.tau           = tau
 
-        # Loss tracking
-        self.huber_loss   = tf.keras.losses.Huber(delta=1.0)
+        # Loss tracking — switch to Mean Squared Error (quadratic loss)
+        self.mse_loss     = tf.keras.losses.MeanSquaredError()
         self.loss_history = []
 
         # Build networks
@@ -57,7 +56,7 @@ class RiskLearn:
         for u in hidden_units:
             m.add(layers.Dense(u, activation='relu'))
         m.add(layers.Dense(self.N))
-        m.compile(optimizer=optimizers.Adam(lr), loss=self.huber_loss)
+        m.compile(optimizer=optimizers.Adam(lr), loss=self.mse_loss)
         return m
 
     def flatten(self, action):
@@ -72,7 +71,6 @@ class RiskLearn:
         return [self.flatten(a) for a in self.env.legal_actions()]
 
     def train_episode(self):
-        # get initial observation dict, then pull out the board array
         obs        = self.env.reset()
         state_arr  = obs["state"]
         done       = False
@@ -85,31 +83,28 @@ class RiskLearn:
             valid = self.legal_actions_flat()
 
             if cp == 1:
-                # player 1 epsilon-greedy
+                # player 1: ε-greedy
                 if random.random() < self.epsilon:
                     idx = random.choice(valid)
                 else:
-                    qv   = self.q_model(
-                              self.env.perspective(state_arr, 1)[None]
-                          ).numpy()[0]
+                    qv   = self.q_model(self.env.perspective(state_arr, 1)[None]).numpy()[0]
                     mask = np.full(self.N, -1e9, dtype=np.float32)
                     mask[valid] = qv[valid]
                     idx = int(mask.argmax())
                 action = self.unflatten(idx)
             else:
-                # player 2 random
+                # player 2: random
                 idx    = random.choice(valid)
                 action = self.unflatten(idx)
 
-            # step environment (returns new obs dict)
             next_obs, scaled_r, done, info = self.env.step(action)
-            raw_r       = info["raw_reward"]
+            raw_r = info["raw_reward"]
             next_state_arr = next_obs["state"]
 
             last_scaled = scaled_r
             last_raw    = raw_r
 
-            # only store / train on player 1 transitions
+            # store & train only on player 1
             if cp == 1:
                 self.replay.append((
                     state_arr.copy(), idx, scaled_r,
@@ -118,11 +113,9 @@ class RiskLearn:
                 if len(self.replay) >= self.batch_size:
                     self._replay_update()
 
-            # advance
             state_arr = next_state_arr
             steps += 1
-            self.epsilon = max(self.epsilon_min,
-                               self.epsilon - self.epsilon_decay)
+            self.epsilon = max(self.epsilon_min, self.epsilon - self.epsilon_decay)
 
         # soft‐update target network
         for w, wt in zip(self.q_model.trainable_variables,
@@ -135,14 +128,10 @@ class RiskLearn:
         batch = random.sample(self.replay, self.batch_size)
         sb, ab, rb, nsb, db = zip(*batch)
 
-        s_t  = np.array([
-            self.env.perspective(s, 1) for s in sb
-        ], dtype=np.float32)
-        ns_t = np.array([
-            self.env.perspective(s, 1) for s in nsb
-        ], dtype=np.float32)
+        s_t  = np.array([self.env.perspective(s, 1) for s in sb],  dtype=np.float32)
+        ns_t = np.array([self.env.perspective(s, 1) for s in nsb], dtype=np.float32)
 
-        # Double-DQN target
+        # Double-DQN target calculation
         qn_next   = self.q_model(ns_t).numpy()
         best_next = np.argmax(qn_next, axis=1)
         qn_target = self.target_model(ns_t).numpy()
@@ -154,10 +143,9 @@ class RiskLearn:
 
         with tf.GradientTape() as tape:
             q_vals = self.q_model(s_t, training=True)
-            q_sel  = tf.reduce_sum(
-                q_vals * tf.one_hot(ab, self.N), axis=1
-            )
-            loss   = tf.reduce_mean(self.huber_loss(y, q_sel))
+            q_sel  = tf.reduce_sum(q_vals * tf.one_hot(ab, self.N), axis=1)
+            # quadratic (MSE) loss
+            loss   = self.mse_loss(y, q_sel)
 
         grads = tape.gradient(loss, self.q_model.trainable_variables)
         self.q_model.optimizer.apply_gradients(
@@ -171,19 +159,19 @@ class RiskLearn:
             _, raw_r, s = self.train_episode()
             rewards.append(raw_r)
             steps.append(s)
-            print(f"Episode {ep}/{episodes} | ε={self.epsilon:.3f} | reward={raw_r:+.3f} | steps={s}")
-            # force-render end phase
+            print(f"Episode {ep}/{episodes} | epsilon={self.epsilon:.3f} | reward={raw_r:+.3f} | steps={s}")
+            # render end phase
             self.env.phase = 3
             print("** NOW PHASE: End **")
             self.env.render()
             print(f"reward = {raw_r:+.3f}")
             print("-"*40)
 
-        # Plot & save loss curve
+        # plot & save loss curve
         plt.figure()
         plt.plot(self.loss_history)
-        plt.xlabel("Replay‐updates")
-        plt.ylabel("Huber loss")
+        plt.xlabel("Replay-updates")
+        plt.ylabel("MSE loss")
         plt.title("Loss Curve")
         out_dir = os.path.join(os.path.dirname(__file__), "..", "output")
         os.makedirs(out_dir, exist_ok=True)
@@ -192,7 +180,7 @@ class RiskLearn:
             plt.show()
         plt.close()
 
-        # Save weights
+        # save model weights
         self.q_model.save_weights(
             os.path.join(out_dir, "weights.weights.h5")
         )
@@ -203,14 +191,13 @@ def main():
     gpus = tf.config.list_physical_devices('GPU')
     if gpus:
         print("GPUs found:", gpus)
-        # optional: avoid allocating all GPU memory at once
         for gpu in gpus:
             tf.config.experimental.set_memory_growth(gpu, True)
     else:
         print("No GPU detected, will run on CPU.")
 
-    learner = RiskLearn(max_turns=12, epsilon_decay=1e-4)
-    learner.train(episodes=32, show=True)
+    learner = RiskLearn(max_turns=16, epsilon_decay=1e-4)
+    learner.train(episodes=64, show=True)
 
 if __name__ == "__main__":
     main()

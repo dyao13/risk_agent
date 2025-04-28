@@ -67,13 +67,34 @@ def step_jit(state, phase, current_player, action_flat,
              intermediate_scale, max_reinf, MAX_ARMY, max_turns):
     T = state.shape[0]
 
-    # if no attacks possible, skip to Fortify
-    if phase == 1:
-        can_attack = False
+    # --- AUTO-SKIP EMPTY PHASES ---
+    # If no reinforcements left, skip from Reinforce → Attack
+    if phase == 0 and reinf == 0:
+        phase = 1
+
+    # If in Fortify but no legal fortify moves, skip → End
+    elif phase == 2:
+        can_fortify = False
         for s in range(T):
             if state[s,0] == current_player and state[s,1] > 1:
                 for d in range(T):
-                    if adj[s,d] == 1 and state[d,0] != current_player:
+                    if adj[s,d] == 1 and state[d,0] == current_player:
+                        if path_owned_jit(adj, state[:,0], current_player, s, d):
+                            can_fortify = True
+                            break
+                if can_fortify:
+                    break
+        if not can_fortify:
+            phase = 3
+    # --- end auto-skip ---
+
+    # if no attacks possible, skip Attack → Fortify
+    if phase == 1:
+        can_attack = False
+        for s in range(T):
+            if state[s,0]==current_player and state[s,1]>1:
+                for d in range(T):
+                    if adj[s,d]==1 and state[d,0]!=current_player:
                         can_attack = True
                         break
                 if can_attack: break
@@ -99,9 +120,9 @@ def step_jit(state, phase, current_player, action_flat,
     elif phase == 1:
         if act_phase == 2 and k == 0:
             phase = 2
-        elif (act_phase == 1 and adj[src,dst] == 1
-              and state[src,0] == current_player
-              and state[dst,0] != current_player
+        elif (act_phase == 1 and adj[src,dst]==1
+              and state[src,0]==current_player
+              and state[dst,0]!=current_player
               and 1 <= k < state[src,1]):
             al, dl = resolve_combat_jit(state[dst,1], state[src,1], k)
             state[src,1] -= al
@@ -123,14 +144,14 @@ def step_jit(state, phase, current_player, action_flat,
             if act_phase == 3 and k == 0:
                 phase = 3
             elif (act_phase == 2 and 0 < k < state[src,1]
-                  and state[src,0] == current_player
-                  and state[dst,0] == current_player):
+                  and state[src,0]==current_player
+                  and state[dst,0]==current_player):
                 if path_owned_jit(adj, state[:,0], current_player, src, dst):
                     state[src,1] -= k
                     state[dst,1] += k
                     fortify_steps += 1
 
-    # Phase 3: End‐turn
+    # Phase 3: End-turn
     else:
         current_player = 3 - current_player
         owned = (state[:,0] == current_player).sum()
@@ -142,7 +163,7 @@ def step_jit(state, phase, current_player, action_flat,
                     complete = False; break
             if complete:
                 base += cont_bonus[ci]
-        # go‐second bonus
+        # go-second bonus
         if current_player == 2 and t2 == 0:
             base += 1
         reinf = base
@@ -154,7 +175,7 @@ def step_jit(state, phase, current_player, action_flat,
         turns_elapsed += 1
         fortify_steps = 0
 
-    # check for game‐over
+    # check for game-over
     done = False
     if turns_elapsed >= max_turns:
         done = True
@@ -166,11 +187,11 @@ def step_jit(state, phase, current_player, action_flat,
         if all1 or all2:
             done = True
 
-    # compute raw reward
-    owned1 = (state[:,0] == 1).sum()
-    owned2 = (state[:,0] == 2).sum()
-    b1 = max(1, owned1 // 3)
-    b2 = max(1, owned2 // 3)
+    # differential-based raw reward
+    owned1 = (state[:,0]==1).sum()
+    owned2 = (state[:,0]==2).sum()
+    b1 = max(1, owned1//3)
+    b2 = max(1, owned2//3)
     for ci in range(cont_bonus.shape[0]):
         same1 = True; same2 = True
         for t in range(T):
@@ -179,7 +200,7 @@ def step_jit(state, phase, current_player, action_flat,
                 if state[t,0] != 2: same2 = False
         if same1: b1 += cont_bonus[ci]
         if same2: b2 += cont_bonus[ci]
-    diff = b1 - b2
+    diff       = b1 - b2
     raw_reward = diff / max_reinf
 
     # override on true win/loss
@@ -191,7 +212,7 @@ def step_jit(state, phase, current_player, action_flat,
         if all1 or all2:
             raw_reward = 1.0 if all1 else -1.0
 
-    # only deliver non‐zero reward in phase 3
+    # only deliver non-zero reward in phase 3
     scaled_reward = raw_reward if phase == 3 else 0.0
 
     return (state, phase, current_player,
