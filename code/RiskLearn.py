@@ -49,6 +49,11 @@ class RiskLearn:
         self.target_model  = models.clone_model(self.q_model)
         self.target_model.set_weights(self.q_model.get_weights())
 
+        # Compile the replay-update into a single tf.function
+        self._compiled_replay_update = tf.function(
+            self._replay_update_step, reduce_retracing=True
+        )
+
     def _build_model(self, hidden_units, lr):
         m = models.Sequential()
         m.add(layers.Input(shape=(self.T,2)))
@@ -87,7 +92,7 @@ class RiskLearn:
                 if random.random() < self.epsilon:
                     idx = random.choice(valid)
                 else:
-                    qv   = self.q_model(self.env.perspective(state_arr, 1)[None]).numpy()[0]
+                    qv   = self.q_model(self.env.perspective(state_arr,1)[None]).numpy()[0]
                     mask = np.full(self.N, -1e9, dtype=np.float32)
                     mask[valid] = qv[valid]
                     idx = int(mask.argmax())
@@ -98,14 +103,14 @@ class RiskLearn:
                 action = self.unflatten(idx)
 
             next_obs, scaled_r, done, info = self.env.step(action)
-            raw_r = info["raw_reward"]
-            next_state_arr = next_obs["state"]
+            raw_r         = info["raw_reward"]
+            next_state_arr= next_obs["state"]
 
             last_scaled = scaled_r
             last_raw    = raw_r
 
-            # store & train only on player 1
             if cp == 1:
+                # store & train only on player 1
                 self.replay.append((
                     state_arr.copy(), idx, scaled_r,
                     next_state_arr.copy(), done
@@ -115,9 +120,10 @@ class RiskLearn:
 
             state_arr = next_state_arr
             steps += 1
-            self.epsilon = max(self.epsilon_min, self.epsilon - self.epsilon_decay)
+            self.epsilon = max(self.epsilon_min,
+                               self.epsilon - self.epsilon_decay)
 
-        # soft‐update target network
+        # soft update target network
         for w, wt in zip(self.q_model.trainable_variables,
                          self.target_model.trainable_variables):
             wt.assign(self.tau * w + (1.0 - self.tau) * wt)
@@ -127,31 +133,46 @@ class RiskLearn:
     def _replay_update(self):
         batch = random.sample(self.replay, self.batch_size)
         sb, ab, rb, nsb, db = zip(*batch)
+        # call the precompiled tf.function
+        self._compiled_replay_update(sb, ab, rb, nsb, db)
 
-        s_t  = np.array([self.env.perspective(s, 1) for s in sb],  dtype=np.float32)
-        ns_t = np.array([self.env.perspective(s, 1) for s in nsb], dtype=np.float32)
+    def _replay_update_step(self, sb, ab, rb, nsb, db):
+        # Convert to tensors
+        s_t  = tf.convert_to_tensor(
+            [self.env.perspective(s,1) for s in sb], dtype=tf.float32
+        )
+        ns_t = tf.convert_to_tensor(
+            [self.env.perspective(s,1) for s in nsb], dtype=tf.float32
+        )
+        ab_tensor = tf.convert_to_tensor(ab, dtype=tf.int32)
+        rb_tensor = tf.convert_to_tensor(rb, dtype=tf.float32)
+        done_mask = tf.convert_to_tensor(db, dtype=tf.bool)
 
-        # Double-DQN target calculation
-        qn_next   = self.q_model(ns_t).numpy()
-        best_next = np.argmax(qn_next, axis=1)
-        qn_target = self.target_model(ns_t).numpy()
+        # Double-DQN target
+        qn_next   = self.q_model(ns_t)
+        best_next = tf.argmax(qn_next, axis=1)
+        qn_target = self.target_model(ns_t)
 
-        y = np.array(rb, dtype=np.float32)
-        for i in range(self.batch_size):
-            if not db[i]:
-                y[i] += self.gamma * qn_target[i, best_next[i]]
+        # Build y: rewards + discounted next-Q
+        future_q = tf.reduce_sum(
+            tf.one_hot(best_next, self.N) * qn_target, axis=1
+        )
+        y = rb_tensor + self.gamma * tf.where(
+            done_mask, 0.0, future_q
+        )
 
         with tf.GradientTape() as tape:
             q_vals = self.q_model(s_t, training=True)
-            q_sel  = tf.reduce_sum(q_vals * tf.one_hot(ab, self.N), axis=1)
-            # quadratic (MSE) loss
-            loss   = self.mse_loss(y, q_sel)
+            q_sel  = tf.reduce_sum(
+                q_vals * tf.one_hot(ab_tensor, self.N), axis=1
+            )
+            loss   = tf.reduce_mean(tf.square(y - q_sel))
 
         grads = tape.gradient(loss, self.q_model.trainable_variables)
         self.q_model.optimizer.apply_gradients(
             zip(grads, self.q_model.trainable_variables)
         )
-        self.loss_history.append(float(loss))
+        self.loss_history.append(loss)
 
     def train(self, episodes=256, show=False):
         rewards, steps = [], []
