@@ -140,8 +140,13 @@ class RiskLearn:
         s_t_np  = np.stack([self.env.perspective(s,1) for s in sb])
         ns_t_np = np.stack([self.env.perspective(s,1) for s in nsb])
 
-        # call the compiled update
-        self._compiled_replay_update(s_t_np, ab, rb, ns_t_np, db)
+        # convert the other lists into fixed-shape NumPy arrays
+        ab_np = np.array(ab, dtype=np.int32)
+        rb_np = np.array(rb, dtype=np.float32)
+        db_np = np.array(db, dtype=bool)
+
+        # call the compiled update with pure NumPy inputs
+        self._compiled_replay_update(s_t_np, ab_np, rb_np, ns_t_np, db_np)
 
     def _replay_update_step(self, s_t_np, ab, rb, ns_t_np, db):
         # convert inputs to tensors
