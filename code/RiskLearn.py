@@ -50,6 +50,7 @@ class RiskLearn:
         self.target_model.set_weights(self.q_model.get_weights())
 
         # Compile the replay-update into a single tf.function
+        # Now accepts pre-built NumPy arrays for states
         self._compiled_replay_update = tf.function(
             self._replay_update_step, reduce_retracing=True
         )
@@ -131,35 +132,34 @@ class RiskLearn:
         return last_scaled, last_raw, steps
 
     def _replay_update(self):
+        # sample a batch
         batch = random.sample(self.replay, self.batch_size)
         sb, ab, rb, nsb, db = zip(*batch)
-        # call the precompiled tf.function
-        self._compiled_replay_update(sb, ab, rb, nsb, db)
 
-    def _replay_update_step(self, sb, ab, rb, nsb, db):
-        # Convert to tensors
-        s_t  = tf.convert_to_tensor(
-            [self.env.perspective(s,1) for s in sb], dtype=tf.float32
-        )
-        ns_t = tf.convert_to_tensor(
-            [self.env.perspective(s,1) for s in nsb], dtype=tf.float32
-        )
+        # build NumPy state arrays outside the tf.function
+        s_t_np  = np.stack([self.env.perspective(s,1) for s in sb])
+        ns_t_np = np.stack([self.env.perspective(s,1) for s in nsb])
+
+        # call the compiled update
+        self._compiled_replay_update(s_t_np, ab, rb, ns_t_np, db)
+
+    def _replay_update_step(self, s_t_np, ab, rb, ns_t_np, db):
+        # convert inputs to tensors
+        s_t       = tf.convert_to_tensor(s_t_np, dtype=tf.float32)
+        ns_t      = tf.convert_to_tensor(ns_t_np, dtype=tf.float32)
         ab_tensor = tf.convert_to_tensor(ab, dtype=tf.int32)
         rb_tensor = tf.convert_to_tensor(rb, dtype=tf.float32)
         done_mask = tf.convert_to_tensor(db, dtype=tf.bool)
 
-        # Double-DQN target
+        # Double-DQN target calculation
         qn_next   = self.q_model(ns_t)
         best_next = tf.argmax(qn_next, axis=1)
         qn_target = self.target_model(ns_t)
 
-        # Build y: rewards + discounted next-Q
         future_q = tf.reduce_sum(
             tf.one_hot(best_next, self.N) * qn_target, axis=1
         )
-        y = rb_tensor + self.gamma * tf.where(
-            done_mask, 0.0, future_q
-        )
+        y = rb_tensor + self.gamma * tf.where(done_mask, 0.0, future_q)
 
         with tf.GradientTape() as tape:
             q_vals = self.q_model(s_t, training=True)
