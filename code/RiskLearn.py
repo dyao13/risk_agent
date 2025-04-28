@@ -19,7 +19,7 @@ class RiskLearn:
         gamma=0.99,
         lr=1e-5,
         epsilon_start=1.0,
-        epsilon_end=0.1,
+        epsilon_end=0.05,
         epsilon_decay=2e-5,
         tau=1e-4,
         hidden_units=(64,64)
@@ -196,8 +196,8 @@ def main():
     else:
         print("No GPU detected, will run on CPU.")
 
-    learner = RiskLearn(max_turns=16, epsilon_decay=1e-4)
-    learner.train(episodes=64, show=True)
+    learner = RiskLearn(max_turns=20, epsilon_decay=1e-5)
+    learner.train(episodes=528, show=True)
 
 if __name__ == "__main__":
     main()
