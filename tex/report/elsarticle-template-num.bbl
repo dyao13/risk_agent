@@ -1,0 +1,17 @@
+\begin{thebibliography}{1}
+\expandafter\ifx\csname url\endcsname\relax
+  \def\url#1{\texttt{#1}}\fi
+\expandafter\ifx\csname urlprefix\endcsname\relax\def\urlprefix{URL }\fi
+\expandafter\ifx\csname href\endcsname\relax
+  \def\href#1#2{#2} \def\path#1{#1}\fi
+
+\bibitem{risk1959}
+P.~Brothers, \href{https://www.hasbro.com/common/instruct/risk.pdf}{Risk: The
+  Classic World Domination Game} (1993).
+\newline\urlprefix\url{https://www.hasbro.com/common/instruct/risk.pdf}
+
+\bibitem{puterman2014markov}
+M.~L. Puterman, Markov decision processes: discrete stochastic dynamic
+  programming, John Wiley \& Sons, 2014.
+
+\end{thebibliography}

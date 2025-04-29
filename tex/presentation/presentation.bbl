@@ -1,0 +1,37 @@
+\begin{thebibliography}{}
+
+\bibitem[Chollet et~al., 2015]{chollet2015keras}
+Chollet, F. et~al. (2015).
+\newblock Keras.
+\newblock \url{https://keras.io}.
+
+\bibitem[{Parker Brothers}, 1993]{risk1959}
+{Parker Brothers} (1993).
+\newblock {\em Risk: The Classic World Domination Game}.
+\newblock Tonka Corporation.
+
+\bibitem[Puterman, 2014]{puterman2014markov}
+Puterman, M.~L. (2014).
+\newblock {\em Markov decision processes: discrete stochastic dynamic
+  programming}.
+\newblock John Wiley \& Sons.
+
+\bibitem[Towers et~al., 2024]{towers2024gymnasium}
+Towers, M., Kwiatkowski, A., Terry, J., Balis, J.~U., De~Cola, G., Deleu, T.,
+  Goul{\~a}o, M., Kallinteris, A., Krimmel, M., KG, A., et~al. (2024).
+\newblock Gymnasium: A standard interface for reinforcement learning
+  environments.
+\newblock {\em arXiv preprint arXiv:2407.17032}.
+
+\bibitem[Tzu, 1998]{sun_tzu_art_of_war_132}
+Tzu, S. (1998).
+\newblock {\em The Art of War}.
+\newblock Project Gutenberg.
+
+\bibitem[Van~Hasselt et~al., 2016]{van2016deep}
+Van~Hasselt, H., Guez, A., and Silver, D. (2016).
+\newblock Deep reinforcement learning with double q-learning.
+\newblock In {\em Proceedings of the AAAI conference on artificial
+  intelligence}, volume 30(1).
+
+\end{thebibliography}
