@@ -13,16 +13,17 @@ from RiskEnv import RiskEnv
 from RiskLearn import DDQNAgent
 
 # Configuration constants
-NUM_EPISODES = 200
-NUM_EVALS    = 100
-MAX_TURNS    = 40
+NUM_EPISODES = 10000
+NUM_EVALS    = 1000
+MAX_TURNS    = 20
 
 # Hyperparameter grid
 param_grid = {
-    'batch_size':    [64, 128, 256],
-    'gamma':         [0.9, 0.99, 1.0],
-    'lr':            [1e-5, 1e-6, 1e-7],
-    'epsilon_decay': [500, 1000, 2000],
+    'batch_size':    [64],
+    'gamma':         [1.0],
+    'lr':            [1e-5, 1e-6],
+    'epsilon_decay': [4000, 8000],
+    'target_update_freq': [60, 120],
 }
 
 # Ensure output directory exists

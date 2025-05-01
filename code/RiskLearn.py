@@ -39,9 +39,9 @@ def build_q_network(input_dim, output_dim):
 class DDQNAgent:
     def __init__(
         self, env,
-        buffer_size=10000, batch_size=128, gamma=0.99,
-        lr=1e-6, target_update_freq=2,
-        epsilon_start=1.0, epsilon_end=0.1, epsilon_decay=500
+        buffer_size=10000, batch_size=64, gamma=1,
+        lr=1e-6, target_update_freq=12,
+        epsilon_start=1.0, epsilon_end=0.1, epsilon_decay=10000
     ):
         self.env = env
         self.batch_size = batch_size
@@ -60,7 +60,7 @@ class DDQNAgent:
         self.target_net = build_q_network(self.input_dim, self.output_dim)
         self.target_net.set_weights(self.policy_net.get_weights())
 
-        self.optimizer = optimizers.Adam(lr, clipnorm=0.5)
+        self.optimizer = optimizers.Adam(lr, clipnorm=1.0)
         self.loss_fn = losses.Huber(delta=1.0)
         self.replay_buffer = ReplayBuffer(buffer_size)
         self.loss_history = []
@@ -69,11 +69,10 @@ class DDQNAgent:
         self.epsilon_end = epsilon_end
         self.epsilon_decay = epsilon_decay
 
-        # parameter prefix for files (include epsilon_decay)
         gamma_str = str(self.gamma).replace('.', 'p')
         lr_str = str(lr).replace('.', 'p')
         epsdec_str = str(self.epsilon_decay)
-        self.params = f"bs{batch_size}_epsdec{epsdec_str}_gamma{gamma_str}_lr{lr_str}"
+        self.params = f"bs{batch_size}_epsdec{epsdec_str}_gamma{gamma_str}_lr{lr_str}_tuf{target_update_freq}"
 
     def encode_state(self, obs):
         turn_norm = obs['turn'] / self.env.max_turns
@@ -134,34 +133,81 @@ class DDQNAgent:
 
         episode_rewards = []
         for ep in tqdm(range(1, num_episodes+1), desc="Training"):
-            obs, _ = self.env.reset(seed=random.randrange(1_000_000_000))
+            obs, _ = self.env.reset()
             state = self.encode_state(obs)
             done = False
             final_reward = 0.0
             while not done:
                 legal = self.env.get_legal_actions()
                 flat = [a['type']*64 + a['source']*8 + a['target'] for a in legal] or [0]
-                if obs['phase'] == self.env.PHASE_ATTACK:
+                if self.env.current_player == 0 and obs['phase'] == self.env.PHASE_ATTACK:
                     action = self.select_action(state, flat)
+                    a_type, src, tgt = action//64, (action%64)//8, action%8
+
+                    obs_next, reward, done, _, _ = self.env.step({
+                        'type':a_type, 'source':src, 'target':tgt
+                    })
+
+                    next_state = self.encode_state(obs_next)
+                    obs, state = obs_next, next_state
+
+                    loss = self.optimize()
+                    if loss is not None:
+                        self.loss_history.append(loss)
+                    self.replay_buffer.push(state, action, reward, next_state, float(done))
+                    final_reward = reward
+                    episode_rewards.append(final_reward)
                 else:
                     action = random.choice(flat)
-                a_type, src, tgt = action//64, (action%64)//8, action%8
+                    a_type, src, tgt = action//64, (action%64)//8, action%8
 
-                obs_next, reward, done, _, _ = self.env.step({
-                    'type':a_type, 'source':src, 'target':tgt
-                })
-                next_state = self.encode_state(obs_next)
-                loss = self.optimize()
-                if loss is not None:
-                    self.loss_history.append(loss)
-                self.replay_buffer.push(state, action, reward, next_state, float(done))
-                obs, state = obs_next, next_state
-                final_reward = reward
+                    obs_next, reward, done, _, _ = self.env.step({
+                        'type':a_type, 'source':src, 'target':tgt
+                    })
 
-            episode_rewards.append(final_reward)
+                    next_state = self.encode_state(obs_next)
+                    obs, state = obs_next, next_state
+
             if ep % self.target_update_freq == 0:
                 self.target_net.set_weights(self.policy_net.get_weights())
             self.epsilon = self.epsilon_end + (self.epsilon - self.epsilon_end) * np.exp(-ep / self.epsilon_decay)
+
+            # if ep % 50 == 0:
+            #     eval_rewards = []
+            #     wins = 0.0
+            #     total_reward = 0.0
+
+            #     for _ in tqdm(range(50), desc="Agent Eval {ep}"):
+            #         obs, _ = self.env.reset()
+            #         state = self.encode_state(obs)
+            #         done = False
+            #         final_reward = 0.0
+
+            #         while not done:
+            #             legal = self.env.get_legal_actions()
+            #             flat = [a['type']*64 + a['source']*8 + a['target'] for a in legal] or [0]
+            #             mask = np.zeros(self.output_dim, dtype=bool)
+            #             mask[flat] = True
+            #             state_tf = tf.constant(state[None, :], dtype=tf.float32)
+            #             mask_tf = tf.constant(mask[None, :])
+            #             action = int(self.greedy_action(state_tf, mask_tf)[0])
+
+            #             a_type, src, tgt = action//64, (action%64)//8, action%8
+            #             obs, reward, done, _, _ = self.env.step({
+            #                 'type':a_type, 'source':src, 'target':tgt
+            #             })
+            #             state = self.encode_state(obs)
+            #             final_reward = reward
+
+            #         eval_rewards.append(final_reward)
+            #         total_reward += final_reward
+            #         if final_reward > 0:
+            #             wins += 1.0
+            #         elif final_reward == 0.0:
+            #             wins += 0.5
+
+            #     print(f"\nAgent Win rate: {wins/50:.2f}")
+            #     print(f"Average final reward: {total_reward/50:.4f}")
 
         weights_path = os.path.join(base_dir, f"{self.params}_weights.h5")
         loss_png = os.path.join(base_dir, f"{self.params}_loss.png")
@@ -169,8 +215,18 @@ class DDQNAgent:
         rewards_txt = os.path.join(base_dir, f"{self.params}_episode_rewards.txt")
 
         self.policy_net.save_weights(weights_path)
+
+        loss_history = np.array(self.loss_history)
+        moving_avg = np.empty_like(loss_history)
+        cumsum = np.cumsum(loss_history)
+        for i in range(len(loss_history)):
+            if i < 100:
+                moving_avg[i] = cumsum[i] / (i + 1)
+            else:
+                moving_avg[i] = (cumsum[i] - cumsum[i - 100]) / 100
+
         plt.figure()
-        plt.plot(self.loss_history)
+        plt.plot(loss_history)
         plt.savefig(loss_png)
         plt.close()
         np.savetxt(loss_txt, np.array(self.loss_history), fmt='%.6f')
@@ -193,23 +249,35 @@ class DDQNAgent:
             final_reward = 0.0
 
             while not done:
-                legal = self.env.get_legal_actions()
-                flat = [a['type']*64 + a['source']*8 + a['target'] for a in legal] or [0]
-                mask = np.zeros(self.output_dim, dtype=bool)
-                mask[flat] = True
-                state_tf = tf.constant(state[None, :], dtype=tf.float32)
-                mask_tf = tf.constant(mask[None, :])
-                action = int(self.greedy_action(state_tf, mask_tf)[0])
+                if self.env.current_player == 0 and obs['phase'] == self.env.PHASE_ATTACK:
+                    legal = self.env.get_legal_actions()
+                    flat = [a['type']*64 + a['source']*8 + a['target'] for a in legal] or [0]
+                    mask = np.zeros(self.output_dim, dtype=bool)
+                    mask[flat] = True
+                    state_tf = tf.constant(state[None, :], dtype=tf.float32)
+                    mask_tf = tf.constant(mask[None, :])
+                    action = int(self.greedy_action(state_tf, mask_tf)[0])
 
-                a_type, src, tgt = action//64, (action%64)//8, action%8
-                obs, reward, done, _, _ = self.env.step({
-                    'type':a_type, 'source':src, 'target':tgt
-                })
-                state = self.encode_state(obs)
-                final_reward = reward
+                    a_type, src, tgt = action//64, (action%64)//8, action%8
+                    obs, reward, done, _, _ = self.env.step({
+                        'type':a_type, 'source':src, 'target':tgt
+                    })
+                    state = self.encode_state(obs)
+                    final_reward = reward
+                else:
+                    legal = self.env.get_legal_actions()
+                    flat = [a['type']*64 + a['source']*8 + a['target'] for a in legal] or [0]
+                    action = random.choice(flat)
+
+                    a_type, src, tgt = action//64, (action%64)//8, action%8
+                    obs, reward, done, _, _ = self.env.step({
+                        'type':a_type, 'source':src, 'target':tgt
+                    })
+                    state = self.encode_state(obs)
 
             eval_rewards.append(final_reward)
             total_reward += final_reward
+
             if final_reward > 0:
                 wins += 1.0
             elif final_reward == 0.0:
@@ -268,22 +336,8 @@ class DDQNAgent:
             self.env.render()
             step += 1
 
-
-def sweep_params(param_grid, num_episodes=50, num_evals=50, max_turns=40):
-    base_dir = os.path.join(os.path.dirname(__file__), "..", "output")
-    os.makedirs(base_dir, exist_ok=True)
-    keys = list(param_grid.keys())
-    for vals in product(*param_grid.values()):
-        kwargs = dict(zip(keys, vals))
-        print(f"\n=== Sweep: {kwargs} ===")
-        env = RiskEnv(max_turns=max_turns)
-        agent = DDQNAgent(env, **kwargs)
-        agent.train(num_episodes)
-        agent.evaluate_agent(num_evals)
-
 if __name__ == '__main__':
     env = RiskEnv(max_turns=40)
     agent = DDQNAgent(env)
-    # agent.train(20)
-    # agent.evaluate_agent(20)
-    sweep_params({'batch_size': [64, 128, 256], 'epsilon_decay': [250, 500, 1000], 'gamma': [0.9, 0.99, 1], 'lr': [1e-5, 1e-6, 1e-7],}, num_episodes=50, num_evals=50)
+    # agent.train(100)
+    agent.evaluate_agent(100)
