@@ -40,8 +40,8 @@ class DDQNAgent:
     def __init__(
         self, env,
         buffer_size=10000, batch_size=64, gamma=1,
-        lr=1e-6, target_update_freq=12,
-        epsilon_start=1.0, epsilon_end=0.1, epsilon_decay=10000
+        lr=1e-5, target_update_freq=120,
+        epsilon_start=1.0, epsilon_end=0.1, epsilon_decay=4000
     ):
         self.env = env
         self.batch_size = batch_size
@@ -339,5 +339,7 @@ class DDQNAgent:
 if __name__ == '__main__':
     env = RiskEnv(max_turns=40)
     agent = DDQNAgent(env)
-    # agent.train(100)
-    agent.evaluate_agent(100)
+
+    # use default hyperparameters
+    agent.train(10000)
+    agent.evaluate_agent(1000)
